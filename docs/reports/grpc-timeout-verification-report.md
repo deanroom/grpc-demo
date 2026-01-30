@@ -324,7 +324,74 @@ options.Limits.Http2.InitialConnectionWindowSize // 默认 128KB
 options.Limits.Http2.InitialStreamWindowSize     // 默认 96KB
 ```
 
-### 5.4 线程池对同步调用的影响
+### 5.4 HTTP/2 流量控制机制（Flow Control）
+
+HTTP/2 使用流量控制防止发送方压垮接收方。这对 Server Streaming 尤为重要。
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    HTTP/2 流量控制窗口机制                            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │              Connection Window (连接级窗口)                     │ │
+│  │              所有流共享，默认 128KB                              │ │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐           │ │
+│  │  │  Stream 1   │  │  Stream 2   │  │  Stream N   │           │ │
+│  │  │  Window     │  │  Window     │  │  Window     │           │ │
+│  │  │  (96KB)     │  │  (96KB)     │  │  (96KB)     │           │ │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘           │ │
+│  │      流级窗口：每个流独立                                       │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+│                                                                     │
+│  数据发送流程：                                                      │
+│  1. 发送方检查：流窗口 > 0 AND 连接窗口 > 0                          │
+│  2. 发送数据，同时减少两个窗口的可用大小                               │
+│  3. 接收方消费数据后，发送 WINDOW_UPDATE 帧恢复窗口                    │
+│  4. 窗口恢复后，发送方可继续发送                                      │
+│                                                                     │
+│  窗口耗尽时：发送方阻塞等待 WINDOW_UPDATE                             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**流量控制对不同 RPC 类型的影响：**
+
+| RPC 类型 | 数据流向 | 窗口消耗特点 | 配置建议 |
+|----------|----------|--------------|----------|
+| Unary | 请求小，响应小 | 窗口快速释放 | 默认即可 |
+| Client Streaming | 客户端持续发送 | 客户端窗口消耗 | 增大服务端接收窗口 |
+| **Server Streaming** | **服务端持续发送** | **服务端窗口消耗快** | **增大客户端接收窗口** |
+| Bidirectional | 双向持续发送 | 双方都消耗 | 双方都增大窗口 |
+
+**窗口配置不当的后果：**
+
+```
+窗口太小 (如默认 96KB)：
+┌──────────────────────────────────────────────────────────┐
+│ Server: 发送 100KB 数据                                   │
+│         ↓                                                │
+│ 窗口耗尽 (96KB < 100KB)                                   │
+│         ↓                                                │
+│ 等待 WINDOW_UPDATE...                                    │
+│         ↓                                                │
+│ 客户端消费后发送 WINDOW_UPDATE                            │
+│         ↓                                                │
+│ 继续发送剩余 4KB                                          │
+│                                                          │
+│ 问题：频繁等待，吞吐量下降                                 │
+└──────────────────────────────────────────────────────────┘
+
+窗口适当大 (如 1MB)：
+┌──────────────────────────────────────────────────────────┐
+│ Server: 连续发送多批数据，无需等待                         │
+│ Client: 有足够缓冲空间接收                                │
+│                                                          │
+│ 优势：高吞吐，低延迟                                       │
+│ 代价：内存占用增加                                        │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 5.5 线程池对同步调用的影响
 
 ```
 同步调用流程：
@@ -386,7 +453,158 @@ builder.WebHost.ConfigureKestrel(options =>
 ThreadPool.SetMinThreads(200, 200);
 ```
 
-### 6.3 监控指标
+### 6.3 Server Streaming 混合场景配置
+
+当同时存在 Unary RPC 和 Server Streaming RPC 时，需要特别注意配置平衡。
+
+#### 6.3.1 Unary vs Server Streaming 对比
+
+| 特性 | Unary RPC | Server Streaming |
+|------|-----------|------------------|
+| 流生命周期 | 毫秒级（快速释放） | 秒~分钟级（长时间占用） |
+| 流量控制 | 影响小 | **关键因素** |
+| 连接保活 | 可选 | **必须** |
+| 超时处理 | Deadline | CancellationToken + 心跳 |
+| 并发流占用 | 低 | **高** |
+
+#### 6.3.2 服务端配置（混合场景）
+
+```csharp
+// Kestrel HTTP/2 配置
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenLocalhost(5000, o => o.Protocols = HttpProtocols.Http2);
+
+    // ============================================================
+    // 并发流配置
+    // ============================================================
+    // 混合场景需要考虑：Streaming 流长时间占用 + Unary 流快速释放
+    // 建议：预估最大 Streaming 并发数 + Unary 并发数的 1.5 倍
+    options.Limits.Http2.MaxStreamsPerConnection = 500;
+
+    // ============================================================
+    // 流量控制窗口（Server Streaming 关键配置）
+    // ============================================================
+    // 连接级窗口：所有流共享，Streaming 场景需要更大
+    options.Limits.Http2.InitialConnectionWindowSize = 2 * 1024 * 1024; // 2MB
+
+    // 流级窗口：每个流独立，影响单流吞吐
+    options.Limits.Http2.InitialStreamWindowSize = 1024 * 1024; // 1MB
+
+    // ============================================================
+    // Keep-Alive 配置（长连接必须）
+    // ============================================================
+    options.Limits.Http2.KeepAlivePingDelay = TimeSpan.FromSeconds(30);
+    options.Limits.Http2.KeepAlivePingTimeout = TimeSpan.FromSeconds(20);
+});
+
+// gRPC 服务配置
+builder.Services.AddGrpc(options =>
+{
+    // 消息大小限制
+    options.MaxReceiveMessageSize = 16 * 1024 * 1024; // 16MB
+    options.MaxSendMessageSize = 16 * 1024 * 1024;    // 16MB
+
+    // 压缩（提升 Streaming 吞吐）
+    options.ResponseCompressionAlgorithm = "gzip";
+    options.ResponseCompressionLevel = CompressionLevel.Fastest;
+});
+```
+
+#### 6.3.3 客户端配置（混合场景）
+
+```csharp
+var handler = new SocketsHttpHandler
+{
+    // 多连接支持
+    EnableMultipleHttp2Connections = true,
+    MaxConnectionsPerServer = 100,
+
+    // 连接保活（Streaming 长连接需要）
+    PooledConnectionIdleTimeout = Timeout.InfiniteTimeSpan,
+    KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+    KeepAlivePingTimeout = TimeSpan.FromSeconds(20),
+
+    // 接收窗口（Server Streaming 关键）
+    InitialHttp2StreamWindowSize = 1024 * 1024, // 1MB
+};
+
+var channel = GrpcChannel.ForAddress(address, new GrpcChannelOptions
+{
+    HttpHandler = handler,
+    MaxReceiveMessageSize = 16 * 1024 * 1024,
+    MaxSendMessageSize = 16 * 1024 * 1024,
+});
+```
+
+#### 6.3.4 Server Streaming 超时处理
+
+```csharp
+// ❌ 错误做法：使用 Deadline（流可能持续很长时间）
+var call = client.StreamData(request, deadline: DateTime.UtcNow.AddSeconds(30));
+
+// ✅ 正确做法：使用 CancellationToken
+using var cts = new CancellationTokenSource();
+var call = client.StreamData(request, cancellationToken: cts.Token);
+
+// 配合心跳/进度检测
+var lastActivity = DateTime.UtcNow;
+await foreach (var item in call.ResponseStream.ReadAllAsync(cts.Token))
+{
+    lastActivity = DateTime.UtcNow;
+    ProcessItem(item);
+}
+
+// 在另一个任务中检测超时
+_ = Task.Run(async () =>
+{
+    while (!cts.Token.IsCancellationRequested)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(10));
+        if (DateTime.UtcNow - lastActivity > TimeSpan.FromSeconds(60))
+        {
+            cts.Cancel(); // 60秒无数据，取消流
+        }
+    }
+});
+```
+
+#### 6.3.5 服务端背压处理
+
+```csharp
+public override async Task StreamData(
+    StreamRequest request,
+    IServerStreamWriter<StreamResponse> responseStream,
+    ServerCallContext context)
+{
+    await foreach (var item in GenerateItems(context.CancellationToken))
+    {
+        // WriteAsync 会自动处理背压：
+        // - 如果客户端消费慢，服务端窗口耗尽
+        // - WriteAsync 会阻塞等待窗口恢复
+        // - 这是 HTTP/2 流量控制的自然行为
+        await responseStream.WriteAsync(item, context.CancellationToken);
+    }
+}
+```
+
+#### 6.3.6 混合场景流数量规划
+
+| 业务场景 | Unary 并发 | Streaming 并发 | `MaxStreamsPerConnection` 建议 |
+|----------|------------|----------------|-------------------------------|
+| Unary 为主（90%） | 200 | 10 | 300 |
+| Streaming 为主（70%） | 50 | 100 | 200 |
+| 混合均衡（50%/50%） | 100 | 50 | 500 |
+| 实时推送场景 | 20 | 500 | 600 |
+
+**计算公式：**
+```
+MaxStreamsPerConnection = (预期 Streaming 并发 × 1.2) + (预期 Unary 并发 × 0.5)
+```
+
+Streaming 流乘以 1.2 是因为需要预留缓冲；Unary 流乘以 0.5 是因为它们快速释放。
+
+### 6.4 监控指标
 
 建议监控以下指标以及时发现问题：
 
@@ -396,6 +614,9 @@ ThreadPool.SetMinThreads(200, 200);
 | 线程池可用线程 | < 10 | 可能发生线程池饥饿 |
 | 请求队列深度 | > 100 | 处理能力不足 |
 | P99 延迟 | > 超时阈值 × 0.8 | 即将触发超时 |
+| **Streaming 活跃流数** | > 预期值 × 1.5 | Streaming 流积压 |
+| **流量控制窗口利用率** | > 90% | 即将触发背压 |
+| **WINDOW_UPDATE 频率** | 过高 | 窗口配置过小 |
 
 ## 7. 附录
 
@@ -424,3 +645,4 @@ dotnet run --project src/GrpcTimeoutSimulator.Client -- \
 ---
 
 *报告生成时间：2026-01-30*
+*更新时间：2026-01-31（添加 Server Streaming 混合场景配置）*
