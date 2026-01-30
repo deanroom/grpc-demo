@@ -97,24 +97,55 @@ public class BurstLoadGenerator
 
         for (int i = 0; i < ChannelPoolSize; i++)
         {
-            // 配置 HTTP handler 以支持高并发
+            // 配置 HTTP handler（支持 Unary + Server Streaming 混合场景）
             var handler = new SocketsHttpHandler
             {
-                // 启用多 HTTP/2 连接
+                // ============================================================
+                // HTTP/2 连接配置
+                // ============================================================
+
+                // 启用多 HTTP/2 连接（关键！）
                 EnableMultipleHttp2Connections = true,
 
-                // 连接池设置
-                PooledConnectionIdleTimeout = Timeout.InfiniteTimeSpan,
-                KeepAlivePingDelay = TimeSpan.FromSeconds(60),
-                KeepAlivePingTimeout = TimeSpan.FromSeconds(30),
-
-                // 增加连接限制
+                // 每服务器最大连接数
                 MaxConnectionsPerServer = 100,
+
+                // ============================================================
+                // 连接保活配置（Server Streaming 长连接需要）
+                // ============================================================
+
+                // 连接空闲超时（Streaming 场景设为无限）
+                PooledConnectionIdleTimeout = Timeout.InfiniteTimeSpan,
+
+                // Keep-Alive 配置（检测连接健康）
+                KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+                KeepAlivePingTimeout = TimeSpan.FromSeconds(20),
+
+                // ============================================================
+                // 流量控制配置（对 Server Streaming 接收很重要）
+                // ============================================================
+
+                // 初始 HTTP/2 流窗口大小
+                InitialHttp2StreamWindowSize = 1024 * 1024, // 1MB
+
+                // ============================================================
+                // 超时配置
+                // ============================================================
+
+                // 连接超时
+                ConnectTimeout = TimeSpan.FromSeconds(10),
+
+                // 响应头超时（Streaming 场景可能需要更长）
+                // 注意：这不是整个流的超时，而是首个响应头的超时
             };
 
             _channels[i] = GrpcChannel.ForAddress(_config.ServerAddress, new GrpcChannelOptions
             {
-                HttpHandler = handler
+                HttpHandler = handler,
+
+                // gRPC Channel 级别配置
+                MaxReceiveMessageSize = 16 * 1024 * 1024, // 16MB
+                MaxSendMessageSize = 16 * 1024 * 1024,    // 16MB
             });
             _clients[i] = new SimulationService.SimulationServiceClient(_channels[i]);
         }
