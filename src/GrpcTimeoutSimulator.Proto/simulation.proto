@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+option csharp_namespace = "GrpcTimeoutSimulator.Proto";
+
+package simulation;
+
+// 模拟服务
+service SimulationService {
+  // 处理请求
+  rpc Process (ProcessRequest) returns (ProcessResponse);
+}
+
+// 处理请求
+message ProcessRequest {
+  // 请求ID
+  string request_id = 1;
+  // 客户端发起时间 (Unix timestamp in ticks)
+  int64 client_send_time_ticks = 2;
+  // 请求的有效载荷大小（可选，用于模拟不同大小的请求）
+  int32 payload_size = 3;
+}
+
+// 处理响应
+message ProcessResponse {
+  // 请求ID
+  string request_id = 1;
+  // 是否成功
+  bool success = 2;
+  // 服务端时间线（用于诊断）
+  ServerTimeline timeline = 3;
+  // 队列深度（入队时）
+  int32 queue_depth_at_enqueue = 4;
+  // 诊断信息
+  DiagnosticInfo diagnostic_info = 5;
+}
+
+// 服务端时间线
+message ServerTimeline {
+  // T2: 请求到达服务端时间 (ticks)
+  int64 arrival_time_ticks = 1;
+  // T3: 进入队列时间 (ticks)
+  int64 enqueue_time_ticks = 2;
+  // T4: 从队列取出开始处理时间 (ticks)
+  int64 dequeue_time_ticks = 3;
+  // T5: 处理完成时间 (ticks)
+  int64 complete_time_ticks = 4;
+}
+
+// 诊断信息
+message DiagnosticInfo {
+  // 处理期间是否发生 GC
+  bool gc_occurred = 1;
+  // GC 代数 (0, 1, 2)
+  int32 gc_generation = 2;
+  // GC 持续时间估算 (ms)
+  int64 gc_duration_ms = 3;
+  // 入队时可用线程池工作线程数
+  int32 available_worker_threads = 4;
+  // 入队时可用线程池IO线程数
+  int32 available_io_threads = 5;
+  // 处理时长 (us)
+  int64 processing_time_us = 6;
+}
