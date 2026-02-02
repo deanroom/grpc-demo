@@ -135,7 +135,7 @@ Phase 5: 生成报告
 
 ## 技术栈
 
-- .NET 9.0
+- .NET 10.0
 - gRPC / Grpc.Net
 - ASP.NET Core Kestrel
 - System.CommandLine
