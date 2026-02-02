@@ -21,11 +21,6 @@ public class BenchmarkConfig
     public string? ExternalServerAddress { get; set; }
 
     /// <summary>
-    /// 是否启用配置优化探索
-    /// </summary>
-    public bool OptimizeConfig { get; set; }
-
-    /// <summary>
     /// SLA 配置
     /// </summary>
     public SlaConfig Sla { get; set; } = new();
@@ -75,7 +70,7 @@ public class SlaConfig
     /// <summary>
     /// P99 延迟阈值（毫秒，默认 200ms）
     /// </summary>
-    public int P99ThresholdMs { get; set; } = 200;
+    public int P99ThresholdMs { get; set; } = 500;
 }
 
 /// <summary>

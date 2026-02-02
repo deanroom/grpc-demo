@@ -1,6 +1,5 @@
-using GrpcTimeoutSimulator.Server.Diagnostics;
-using GrpcTimeoutSimulator.Server.Processing;
-using GrpcTimeoutSimulator.Server.Services;
+using GrpcTimeoutSimulator.Benchmark.Server.Processing;
+using GrpcTimeoutSimulator.Benchmark.Server.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -17,18 +16,15 @@ public class EmbeddedServer : IAsyncDisposable
     private readonly WebApplication _app;
     private readonly int _port;
     private readonly SingleThreadProcessor _processor;
-    private readonly TimeoutDiagnostics _diagnostics;
 
     public string ServerAddress => $"http://localhost:{_port}";
     public SingleThreadProcessor Processor => _processor;
-    public TimeoutDiagnostics Diagnostics => _diagnostics;
 
-    private EmbeddedServer(WebApplication app, int port, SingleThreadProcessor processor, TimeoutDiagnostics diagnostics)
+    private EmbeddedServer(WebApplication app, int port, SingleThreadProcessor processor)
     {
         _app = app;
         _port = port;
         _processor = processor;
-        _diagnostics = diagnostics;
     }
 
     /// <summary>
@@ -68,7 +64,6 @@ public class EmbeddedServer : IAsyncDisposable
 
         // 注册服务
         builder.Services.AddSingleton(processorConfig);
-        builder.Services.AddSingleton<TimeoutDiagnostics>();
         builder.Services.AddSingleton<SingleThreadProcessor>();
         builder.Services.AddGrpc(grpcOptions =>
         {
@@ -81,12 +76,11 @@ public class EmbeddedServer : IAsyncDisposable
 
         // 获取服务实例以便外部访问
         var processor = app.Services.GetRequiredService<SingleThreadProcessor>();
-        var diagnostics = app.Services.GetRequiredService<TimeoutDiagnostics>();
 
         // 启动服务端
         await app.StartAsync();
 
-        return new EmbeddedServer(app, options.Port, processor, diagnostics);
+        return new EmbeddedServer(app, options.Port, processor);
     }
 
     /// <summary>
@@ -95,14 +89,13 @@ public class EmbeddedServer : IAsyncDisposable
     public void ResetStats()
     {
         _processor.ResetStats();
-        _diagnostics.Reset();
     }
 
     public async ValueTask DisposeAsync()
     {
         await _app.StopAsync();
         // WebApplication.DisposeAsync 会自动处理 DI 容器中的服务
-        // 不需要手动 dispose _processor 和 _diagnostics
+        // 不需要手动 dispose _processor
         await _app.DisposeAsync();
     }
 }

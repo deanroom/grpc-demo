@@ -1,8 +1,21 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using GrpcTimeoutSimulator.Server.Diagnostics;
 
-namespace GrpcTimeoutSimulator.Server.Processing;
+namespace GrpcTimeoutSimulator.Benchmark.Server.Processing;
+
+/// <summary>
+/// 请求时间线
+/// </summary>
+public class RequestTimeline
+{
+    public string RequestId { get; set; } = "";
+    public long ClientSendTimeTicks { get; set; }
+    public long ArrivalTimeTicks { get; set; }
+    public long EnqueueTimeTicks { get; set; }
+    public long DequeueTimeTicks { get; set; }
+    public long CompleteTimeTicks { get; set; }
+    public int QueueDepthAtEnqueue { get; set; }
+}
 
 /// <summary>
 /// 工作项
@@ -37,7 +50,6 @@ public class SingleThreadProcessor : IDisposable
 {
     private readonly BlockingCollection<WorkItem> _queue = new();
     private readonly Thread _processingThread;
-    private readonly TimeoutDiagnostics _diagnostics;
     private readonly ProcessorConfig _config;
     private readonly Random _random = new();
     private int _peakQueueDepth;
@@ -45,9 +57,8 @@ public class SingleThreadProcessor : IDisposable
     private int _cancelledCount;
     private int _processedCount;
 
-    public SingleThreadProcessor(TimeoutDiagnostics diagnostics, ProcessorConfig config)
+    public SingleThreadProcessor(ProcessorConfig config)
     {
-        _diagnostics = diagnostics;
         _config = config;
         _processingThread = new Thread(ProcessQueue)
         {
@@ -89,11 +100,6 @@ public class SingleThreadProcessor : IDisposable
     {
         item.Timeline.EnqueueTimeTicks = DateTime.UtcNow.Ticks;
 
-        // 记录线程池状态
-        var (workerThreads, ioThreads) = _diagnostics.RecordThreadPoolState();
-        item.Timeline.AvailableWorkerThreads = workerThreads;
-        item.Timeline.AvailableIoThreads = ioThreads;
-
         // 记录队列深度
         int depth = _queue.Count;
         item.Timeline.QueueDepthAtEnqueue = depth;
@@ -107,14 +113,6 @@ public class SingleThreadProcessor : IDisposable
         }
 
         _queue.Add(item);
-
-        // 每入队10个请求输出一次状态
-        int total = Interlocked.CompareExchange(ref _processedCount, 0, 0) +
-                    Interlocked.CompareExchange(ref _cancelledCount, 0, 0) + depth + 1;
-        if (total % 50 == 0)
-        {
-            Console.WriteLine($"[服务端状态] 入队: {total}, 当前队列深度: {depth + 1}, 峰值: {PeakQueueDepth}");
-        }
     }
 
     /// <summary>
@@ -137,14 +135,7 @@ public class SingleThreadProcessor : IDisposable
                 // 检查是否已取消
                 if (item.CancellationToken.IsCancellationRequested)
                 {
-                    var now = DateTime.UtcNow.Ticks;
-                    var queueWaitMs = (now - item.Timeline.EnqueueTimeTicks) / (double)TimeSpan.TicksPerMillisecond;
                     Interlocked.Increment(ref _cancelledCount);
-
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"[服务端] {item.Timeline.RequestId} 在队列中超时 - 队列等待={queueWaitMs:F0}ms, 入队时队列深度={item.Timeline.QueueDepthAtEnqueue}");
-                    Console.ResetColor();
-
                     item.CompletionSource.TrySetCanceled(item.CancellationToken);
                     continue;
                 }
@@ -161,33 +152,13 @@ public class SingleThreadProcessor : IDisposable
                         break;
                 }
 
-                // 模拟处理（使用精确的 Stopwatch）
-                var sw = Stopwatch.StartNew();
+                // 模拟处理
                 SimulateProcessing();
-                sw.Stop();
-
-                item.Timeline.ProcessingTimeUs = sw.ElapsedTicks * 1_000_000 / Stopwatch.Frequency;
 
                 // T5: 记录完成时间
                 item.Timeline.CompleteTimeTicks = DateTime.UtcNow.Ticks;
 
-                // 检查处理期间是否发生 GC
-                var (gcOccurred, gcGen, gcDuration) = _diagnostics.CheckGcDuring(
-                    item.Timeline.DequeueTimeTicks,
-                    item.Timeline.CompleteTimeTicks);
-                item.Timeline.GcOccurred = gcOccurred;
-                item.Timeline.GcGeneration = gcGen;
-                item.Timeline.GcDurationMs = gcDuration;
-
-                int processed = Interlocked.Increment(ref _processedCount);
-
-                // 每处理50个请求输出一次状态
-                if (processed % 50 == 0)
-                {
-                    var queueWaitMs = (item.Timeline.DequeueTimeTicks - item.Timeline.EnqueueTimeTicks) / (double)TimeSpan.TicksPerMillisecond;
-                    var processMs = (item.Timeline.CompleteTimeTicks - item.Timeline.DequeueTimeTicks) / (double)TimeSpan.TicksPerMillisecond;
-                    Console.WriteLine($"[服务端状态] 已处理: {processed}, 最近请求队列等待: {queueWaitMs:F0}ms, 处理: {processMs:F0}ms, 取消: {CancelledCount}");
-                }
+                Interlocked.Increment(ref _processedCount);
 
                 item.CompletionSource.TrySetResult(true);
             }

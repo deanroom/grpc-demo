@@ -19,11 +19,6 @@ var externalServerOption = new Option<string?>(
     name: "--external-server",
     description: "外部服务端地址（默认使用内嵌服务端）");
 
-var optimizeConfigOption = new Option<bool>(
-    name: "--optimize-config",
-    getDefaultValue: () => false,
-    description: "启用配置优化探索");
-
 var successRateOption = new Option<double>(
     name: "--success-rate",
     getDefaultValue: () => 0.999,
@@ -31,8 +26,8 @@ var successRateOption = new Option<double>(
 
 var p99ThresholdOption = new Option<int>(
     name: "--p99-threshold",
-    getDefaultValue: () => 200,
-    description: "SLA P99 延迟阈值（毫秒，默认 200）");
+    getDefaultValue: () => 500,
+    description: "SLA P99 延迟阈值（毫秒，默认 500）");
 
 var warmupDurationOption = new Option<int>(
     name: "--warmup-duration",
@@ -68,7 +63,6 @@ var requestTimeoutOption = new Option<int>(
 rootCommand.AddOption(modeOption);
 rootCommand.AddOption(concurrencyOption);
 rootCommand.AddOption(externalServerOption);
-rootCommand.AddOption(optimizeConfigOption);
 rootCommand.AddOption(successRateOption);
 rootCommand.AddOption(p99ThresholdOption);
 rootCommand.AddOption(warmupDurationOption);
@@ -84,7 +78,6 @@ rootCommand.SetHandler(async (context) =>
     var mode = context.ParseResult.GetValueForOption(modeOption)!;
     var concurrency = context.ParseResult.GetValueForOption(concurrencyOption)!;
     var externalServer = context.ParseResult.GetValueForOption(externalServerOption);
-    var optimizeConfig = context.ParseResult.GetValueForOption(optimizeConfigOption);
     var successRate = context.ParseResult.GetValueForOption(successRateOption);
     var p99Threshold = context.ParseResult.GetValueForOption(p99ThresholdOption);
     var warmupDuration = context.ParseResult.GetValueForOption(warmupDurationOption);
@@ -106,7 +99,6 @@ rootCommand.SetHandler(async (context) =>
         Mode = mode.ToLower() == "manual" ? BenchmarkMode.Manual : BenchmarkMode.Auto,
         ManualConcurrencyLevels = concurrencyLevels,
         ExternalServerAddress = externalServer,
-        OptimizeConfig = optimizeConfig,
         Sla = new SlaConfig
         {
             SuccessRate = successRate,

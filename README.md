@@ -7,29 +7,17 @@ gRPC 超时模拟与性能评估工具集，用于研究 gRPC 在高并发场景
 ```
 src/
 ├── GrpcTimeoutSimulator.Proto/           # Protobuf 定义
-├── GrpcTimeoutSimulator.Server/          # gRPC 服务端
-├── GrpcTimeoutSimulator.Client/          # gRPC 客户端
-└── GrpcTimeoutSimulator.Benchmark/       # 并发能力探测与性能基准测试
+└── GrpcTimeoutSimulator.Benchmark/       # 并发能力探测与性能基准测试（含内嵌服务端）
 ```
 
 ## 快速开始
 
-### 运行基准测试（推荐）
+### 运行基准测试
 
 单命令启动内嵌服务端并运行并发探测：
 
 ```bash
 dotnet run --project src/GrpcTimeoutSimulator.Benchmark
-```
-
-### 手动运行服务端和客户端
-
-```bash
-# 终端 1: 启动服务端
-dotnet run --project src/GrpcTimeoutSimulator.Server
-
-# 终端 2: 启动客户端
-dotnet run --project src/GrpcTimeoutSimulator.Client
 ```
 
 ## 基准测试工具
@@ -38,8 +26,7 @@ dotnet run --project src/GrpcTimeoutSimulator.Client
 
 - **自动并发探测**：使用自适应二分搜索算法自动探测最大并发能力
 - **SLA 评估**：基于成功率和 P99 延迟判定是否满足 SLA
-- **超时原因分析**：区分 HTTP/2 连接层超时和服务端应用层超时
-- **配置优化**：自动探索最佳配置参数
+- **内嵌服务端**：无需单独启动服务端，一键运行基准测试
 
 ### 核心指标
 
@@ -66,10 +53,6 @@ dotnet run --project src/GrpcTimeoutSimulator.Benchmark -- \
     --mode manual \
     --concurrency 50,100,200,500
 
-# 启用配置优化探索
-dotnet run --project src/GrpcTimeoutSimulator.Benchmark -- \
-    --optimize-config
-
 # 连接外部服务端
 dotnet run --project src/GrpcTimeoutSimulator.Benchmark -- \
     --external-server http://192.168.1.100:5000
@@ -82,9 +65,8 @@ dotnet run --project src/GrpcTimeoutSimulator.Benchmark -- \
 | `--mode` | auto | 测试模式：auto 或 manual |
 | `--concurrency` | 50,100,200,500 | 手动模式并发级别 |
 | `--external-server` | - | 外部服务端地址 |
-| `--optimize-config` | false | 启用配置优化 |
 | `--success-rate` | 0.999 | SLA 成功率阈值 |
-| `--p99-threshold` | 200 | SLA P99 延迟阈值(ms) |
+| `--p99-threshold` | 500 | SLA P99 延迟阈值(ms) |
 | `--warmup-duration` | 5 | 预热时长(秒) |
 | `--test-duration` | 10 | 测试时长(秒) |
 | `--stability-duration` | 30 | 稳定性验证时长(秒) |
@@ -108,8 +90,7 @@ Benchmark 工具将 gRPC 服务端和客户端集成到同一进程中：
 │  │   Client        │   localhost:5000      │   Server     │ │
 │  │                 │                       │              │ │
 │  │  - 负载生成器    │                       │  - 队列处理  │ │
-│  │  - 并发探测器    │                       │  - 诊断系统  │ │
-│  │  - 配置优化器    │                       │              │ │
+│  │  - 并发探测器    │                       │              │ │
 │  └─────────────────┘                       └──────────────┘ │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────────┐│

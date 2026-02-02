@@ -6,31 +6,6 @@ using GrpcTimeoutSimulator.Proto;
 namespace GrpcTimeoutSimulator.Benchmark.Benchmarks;
 
 /// <summary>
-/// 超时原因枚举
-/// </summary>
-[Flags]
-public enum TimeoutReason
-{
-    None = 0,
-    /// <summary>
-    /// 请求未到达服务端（HTTP/2 连接层排队超时）
-    /// </summary>
-    Http2ConnectionLayer = 1,
-    /// <summary>
-    /// 服务端队列等待过长
-    /// </summary>
-    ServerQueueWait = 2,
-    /// <summary>
-    /// 服务端处理时间过长
-    /// </summary>
-    ServerProcessing = 4,
-    /// <summary>
-    /// 客户端被取消
-    /// </summary>
-    ClientCancelled = 8
-}
-
-/// <summary>
 /// 稳态负载生成器
 /// 使用 SemaphoreSlim 控制并发，持续发送请求
 /// </summary>
@@ -158,22 +133,10 @@ public class SteadyStateLoadGenerator : IDisposable
                         {
                             result.SuccessCount++;
                             result.Latencies.Add(requestResult.LatencyMs);
-
-                            // 记录服务端时间分解
-                            if (requestResult.QueueWaitMs > 0)
-                            {
-                                result.ServerQueueWaitTimes.Add(requestResult.QueueWaitMs);
-                            }
                         }
                         else if (requestResult.IsTimeout)
                         {
                             result.TimeoutCount++;
-
-                            // 记录超时原因
-                            if (requestResult.TimeoutReason != TimeoutReason.None)
-                            {
-                                result.TimeoutReasons.Add(requestResult.TimeoutReason);
-                            }
                         }
                         else
                         {
@@ -234,41 +197,19 @@ public class SteadyStateLoadGenerator : IDisposable
             var receiveTimeTicks = DateTime.UtcNow.Ticks;
             var latencyMs = (receiveTimeTicks - sendTimeTicks) / (double)TimeSpan.TicksPerMillisecond;
 
-            // 计算服务端队列等待时间
-            double queueWaitMs = 0;
-            if (response.Timeline != null && response.Timeline.DequeueTimeTicks > 0 && response.Timeline.EnqueueTimeTicks > 0)
-            {
-                queueWaitMs = (response.Timeline.DequeueTimeTicks - response.Timeline.EnqueueTimeTicks)
-                    / (double)TimeSpan.TicksPerMillisecond;
-            }
-
             return new RequestResult
             {
                 Success = response.Success,
-                LatencyMs = latencyMs,
-                QueueWaitMs = queueWaitMs,
-                HasServerTimeline = response.Timeline != null
+                LatencyMs = latencyMs
             };
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.DeadlineExceeded)
         {
-            // 超时：判断是客户端 HTTP/2 层还是服务端应用层
-            // DeadlineExceeded 且没有从服务端收到响应 → HTTP/2 连接层问题
-            // 注意：无法直接获取部分响应，所以 DeadlineExceeded 通常意味着请求未完成
-            return new RequestResult
-            {
-                IsTimeout = true,
-                TimeoutReason = TimeoutReason.Http2ConnectionLayer  // 假设是连接层问题
-            };
+            return new RequestResult { IsTimeout = true };
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.Cancelled)
         {
-            // 被取消：可能是服务端处理超时后取消
-            return new RequestResult
-            {
-                IsTimeout = true,
-                TimeoutReason = TimeoutReason.ClientCancelled
-            };
+            return new RequestResult { IsTimeout = true };
         }
         catch (RpcException)
         {
@@ -276,11 +217,7 @@ public class SteadyStateLoadGenerator : IDisposable
         }
         catch (OperationCanceledException)
         {
-            return new RequestResult
-            {
-                IsError = true,
-                TimeoutReason = TimeoutReason.ClientCancelled
-            };
+            return new RequestResult { IsError = true };
         }
     }
 
@@ -298,9 +235,6 @@ public class SteadyStateLoadGenerator : IDisposable
         public bool IsTimeout;
         public bool IsError;
         public double LatencyMs;
-        public double QueueWaitMs;
-        public bool HasServerTimeline;
-        public TimeoutReason TimeoutReason;
     }
 }
 
@@ -316,46 +250,6 @@ public class LoadTestResult
     public double DurationSec { get; set; }
     public List<double> Latencies { get; set; } = [];
 
-    /// <summary>
-    /// 服务端队列等待时间列表（成功请求）
-    /// </summary>
-    public List<double> ServerQueueWaitTimes { get; set; } = [];
-
-    /// <summary>
-    /// 超时原因列表
-    /// </summary>
-    public List<TimeoutReason> TimeoutReasons { get; set; } = [];
-
     public double SuccessRate => TotalRequests > 0 ? (double)SuccessCount / TotalRequests : 0;
     public double Throughput => DurationSec > 0 ? SuccessCount / DurationSec : 0;
-
-    /// <summary>
-    /// HTTP/2 连接层超时数量
-    /// </summary>
-    public int Http2LayerTimeoutCount => TimeoutReasons.Count(r => r.HasFlag(TimeoutReason.Http2ConnectionLayer));
-
-    /// <summary>
-    /// 服务端应用层超时数量
-    /// </summary>
-    public int ServerLayerTimeoutCount => TimeoutReasons.Count(r =>
-        r.HasFlag(TimeoutReason.ServerQueueWait) || r.HasFlag(TimeoutReason.ServerProcessing));
-
-    /// <summary>
-    /// 平均队列等待时间
-    /// </summary>
-    public double AvgQueueWaitMs => ServerQueueWaitTimes.Count > 0 ? ServerQueueWaitTimes.Average() : 0;
-
-    /// <summary>
-    /// P99 队列等待时间
-    /// </summary>
-    public double P99QueueWaitMs
-    {
-        get
-        {
-            if (ServerQueueWaitTimes.Count == 0) return 0;
-            var sorted = ServerQueueWaitTimes.OrderBy(x => x).ToList();
-            var index = (int)Math.Ceiling(0.99 * sorted.Count) - 1;
-            return sorted[Math.Max(0, Math.Min(index, sorted.Count - 1))];
-        }
-    }
 }

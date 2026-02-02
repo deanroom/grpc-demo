@@ -209,33 +209,6 @@ public class ConcurrencyProber
             Latency = latencyDist,
         };
 
-        // 收集超时分析
-        testResult.Timeout = new TimeoutAnalysis
-        {
-            Http2LayerTimeoutCount = loadResult.Http2LayerTimeoutCount,
-            ServerLayerTimeoutCount = loadResult.ServerLayerTimeoutCount,
-            AvgQueueWaitMs = loadResult.AvgQueueWaitMs,
-            P99QueueWaitMs = loadResult.P99QueueWaitMs
-        };
-
-        // 收集资源快照
-        if (_server != null)
-        {
-            var gcCounts = _server.Diagnostics.GetGcCounts();
-            var threadStats = _server.Diagnostics.GetMinThreadPoolStats();
-
-            testResult.Resource = new ResourceSnapshot
-            {
-                PeakQueueDepth = _server.Processor.PeakQueueDepth,
-                MaxQueueWaitTimeMs = _server.Processor.MaxQueueWaitTimeMs,
-                GcGen0Count = gcCounts.gen0,
-                GcGen1Count = gcCounts.gen1,
-                GcGen2Count = gcCounts.gen2,
-                MinAvailableWorkerThreads = threadStats.minWorker,
-                MinAvailableIoThreads = threadStats.minIo
-            };
-        }
-
         // 检查 SLA
         CheckSla(testResult);
 

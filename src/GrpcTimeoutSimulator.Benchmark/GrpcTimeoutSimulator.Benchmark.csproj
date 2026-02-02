@@ -15,7 +15,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\GrpcTimeoutSimulator.Proto\GrpcTimeoutSimulator.Proto.csproj" />
-    <ProjectReference Include="..\GrpcTimeoutSimulator.Server\GrpcTimeoutSimulator.Server.csproj" />
   </ItemGroup>
 
 </Project>
